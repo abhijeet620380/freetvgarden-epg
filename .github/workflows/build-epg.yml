@@ -2,7 +2,7 @@ name: Build EPG Data
 
 on:
   schedule:
-    - cron: "0 0,12 * * *"   # Runs twice a day (00:00 and 12:00 UTC)
+    - cron: "17 * * * *"     # Runs every hour at minute 17 (avoids the busy top-of-hour queue)
   workflow_dispatch: {}      # Allows manual triggering
 
 permissions:
@@ -27,13 +27,17 @@ jobs:
         continue-on-error: true
         run: |
           # --fail: an HTTP error must not leave an HTML error page saved as the .gz file
-          curl -L --fail --retry 3 --retry-delay 10 -o guide-all.xml.gz "https://epgshare01.online/epgshare01/epg_ripper_ALL_SOURCES1.xml.gz" || rm -f guide-all.xml.gz
+          curl -L --fail --retry 3 --retry-delay 10 -D headers.txt -o guide-all.xml.gz "https://epgshare01.online/epgshare01/epg_ripper_ALL_SOURCES1.xml.gz" || rm -f guide-all.xml.gz
+          # When the source file was last updated (shown in the site's "updated ... ago" note)
+          LM=$(grep -i '^last-modified:' headers.txt | tail -1 | cut -d' ' -f2- | tr -d '\r')
+          echo "Source Last-Modified: ${LM:-unknown}"
+          echo "SOURCE_MODIFIED=$LM" >> "$GITHUB_ENV"
 
       - name: Process EPG Data
         run: node build-epg.mjs
 
       - name: Cleanup Large Files
-        run: rm -f guide-all.xml.gz
+        run: rm -f guide-all.xml.gz headers.txt
 
       - name: Commit and push
         run: |
