@@ -22,7 +22,7 @@ jobs:
       - name: Download Master XML.GZ file
         continue-on-error: true
         run: |
-          curl -L -o guide-all.xml.gz "https://github.com/epgshare01/share01/raw/master/epg_ripper_ALL_SOURCES1.xml.gz" || true
+          curl -L -o guide-all.xml.gz "https://epgshare01.online/epgshare01/epg_ripper_ALL_SOURCES1.xml.gz" || true
 
       - name: Process EPG Data
         run: node build-epg.mjs
@@ -34,7 +34,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add epg/
+          git add epg/ || true
           git diff --staged --quiet || git commit -m "Update EPG data $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          git push
+          git push || true
           
