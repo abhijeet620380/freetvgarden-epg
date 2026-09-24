@@ -2,11 +2,15 @@ name: Build EPG Data
 
 on:
   schedule:
-    - cron: "0 0 * * *"   # Runs once a day at midnight UTC
-  workflow_dispatch: {}    # Allows manual triggering
+    - cron: "0 0,12 * * *"   # Runs twice a day (00:00 and 12:00 UTC)
+  workflow_dispatch: {}      # Allows manual triggering
 
 permissions:
   contents: write
+
+concurrency:
+  group: build-epg
+  cancel-in-progress: false  # never run two builds at once
 
 jobs:
   build:
@@ -22,7 +26,8 @@ jobs:
       - name: Download Master XML.GZ file
         continue-on-error: true
         run: |
-          curl -L -o guide-all.xml.gz "https://epgshare01.online/epgshare01/epg_ripper_ALL_SOURCES1.xml.gz" || true
+          # --fail: an HTTP error must not leave an HTML error page saved as the .gz file
+          curl -L --fail --retry 3 --retry-delay 10 -o guide-all.xml.gz "https://epgshare01.online/epgshare01/epg_ripper_ALL_SOURCES1.xml.gz" || rm -f guide-all.xml.gz
 
       - name: Process EPG Data
         run: node build-epg.mjs
@@ -36,5 +41,5 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add epg/ || true
           git diff --staged --quiet || git commit -m "Update EPG data $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          git pull --rebase || true
           git push || true
-          
