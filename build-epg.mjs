@@ -40,19 +40,37 @@ function normalizeName(name) {
     .replace(/[^\p{L}\p{M}\p{N}]+/gu, '');                   // keep letters/marks/digits of any script
 }
 
-// "ZeeCinema.in" -> "in", "Foo.us2" -> "us". Empty string when the id has no country suffix.
+// Real two-letter country codes. A trailing ".xx" only counts as a COUNTRY when it is in this
+// list (so "BBC.One" or "Sky.Max" no longer look like countries "one"/"max").
+const ISO2 = new Set(('ad ae af ag ai al am ao aq ar as at au aw ax az ba bb bd be bf bg bh bi bj bl bm bn bo bq br bs bt bv bw by bz ' +
+  'ca cc cd cf cg ch ci ck cl cm cn co cr cu cv cw cx cy cz de dj dk dm do dz ec ee eg eh er es et fi fj fk fm fo fr ga gb gd ge gf gg gh gi gl gm gn gp gq gr gs gt gu gw gy ' +
+  'hk hm hn hr ht hu id ie il im in io iq ir is it je jm jo jp ke kg kh ki km kn kp kr kw ky kz la lb lc li lk lr ls lt lu lv ly ma mc md me mf mg mh mk ml mm mn mo mp mq mr ms mt mu mv mw mx my mz ' +
+  'na nc ne nf ng ni nl no np nr nu nz om pa pe pf pg ph pk pl pm pn pr ps pt pw py qa re ro rs ru rw sa sb sc sd se sg sh si sj sk sl sm sn so sr ss st sv sx sy sz ' +
+  'tc td tf tg th tj tk tl tm tn to tr tt tv tw tz ua ug um us uy uz va vc ve vg vi vn vu wf ws ye yt za zm zw uk').split(' '));
+
+// "ZeeCinema.in" -> "in", "Foo.us2" -> "us". Empty string when the id has no real country suffix.
 const CC_ALIAS = { uk: 'gb' };
 const normCC = (c) => CC_ALIAS[c] || c;
 function xmlIdCountry(xmlId) {
-  const m = String(xmlId).toLowerCase().match(/\.([a-z]{2,3})\d*$/);
-  return m ? normCC(m[1]) : '';
+  const m = String(xmlId).toLowerCase().match(/\.([a-z]{2})\d*$/);
+  return m && ISO2.has(m[1]) ? normCC(m[1]) : '';
 }
 
-// IMPROVED id key: lowercase, drop an "@feed" suffix ("AajTak.in@SD" -> "aajtak.in"),
-// and drop the numeric variant some XMLTV files add after the country ("Foo.us2" -> "foo.us").
-// Both OUR ids and XMLTV ids go through this, so "the XMLTV id IS our id" matches more often.
+// IMPROVED id key, used for BOTH our ids and XMLTV ids so they can meet in the middle:
+//   "AajTak.in"  and  "Aaj.Tak.in"        -> "aajtak.in"   (dots between words removed)
+//   "NTV.HD.ca2" and  "NTV.ca"            -> "ntv.ca"      (HD/SD tags and the "2" removed)
+//   "Rede.TV.br" and  "RedeTV.br"         -> "rede.br"     (a "TV" word/affix removed)
+//   "AajTak.in@SD"                        -> "aajtak.in"   (feed suffix removed)
+// The country code stays part of the key, so a channel can only match inside its own country.
+const ID_NOISE = new Set(['hd', 'sd', 'fhd', 'uhd', '4k', 'hq', 'tv', 'live']);
 function idKey(id) {
-  return String(id || '').toLowerCase().replace(/@.*$/, '').replace(/(\.[a-z]{2,3})\d+$/, '$1');
+  const raw = String(id || '').toLowerCase().replace(/@.*$/, '');
+  const m = raw.match(/^(.*?)\.([a-z]{2})\d*$/);
+  if (!m || !ISO2.has(m[2])) return raw;                // no real country suffix -> leave as is
+  let base = m[1].split('.').filter(t => t && !ID_NOISE.has(t)).join('').replace(/[^\p{L}\p{M}\p{N}]+/gu, '');
+  if (base.length > 4 && base.endsWith('tv')) base = base.slice(0, -2);     // "redetv" -> "rede"
+  else if (base.length > 4 && base.startsWith('tv')) base = base.slice(2);  // "tvchile" -> "chile"
+  return `${base || m[1]}.${normCC(m[2])}`;
 }
 
 function decodeXml(s) {
@@ -149,6 +167,7 @@ async function main() {
   // ourId -> Set of XMLTV ids that matched by name but belong to another country / are ambiguous
   const rejected = new Map();
   let xmlChannelCount = 0, xmlChannelMatched = 0;
+  const xmlByCC = {};                                    // country suffix -> number of XMLTV channels
 
   for (const file of guideFiles) {
     console.log(`Processing ${file}...`);
@@ -160,6 +179,7 @@ async function main() {
     const finishChannel = () => {
       if (!currentXmlId) return;
       xmlChannelCount++;
+      { const xc = xmlIdCountry(currentXmlId) || '??'; xmlByCC[xc] = (xmlByCC[xc] || 0) + 1; }
       const r = resolveChannel(currentXmlId, currentNames);
       if (r && r.targets) {
         const prev = xmlIdToOurData.get(currentXmlId);
@@ -265,7 +285,12 @@ async function main() {
   console.log(`EPG coverage: ${totalWith}/${totalLive} live channels (${((totalWith / Math.max(1, totalLive)) * 100).toFixed(1)}%). ` +
     `Matched by id: ${tierCount[3]}, by name+country: ${tierCount[2]}, by name only: ${tierCount[1]}.`);
   const worst = Object.entries(missingByCountry).sort((a, b) => b[1].length - a[1].length).slice(0, 15);
-  console.log('Countries with most channels still WITHOUT a guide: ' + worst.map(([cc, l]) => `${cc}:${l.length}`).join(', '));
+  console.log('Countries with most channels still WITHOUT a guide (missing / our live / XMLTV channels for that country):');
+  const liveByCC = {};
+  for (const c of liveList) liveByCC[c.country] = (liveByCC[c.country] || 0) + 1;
+  for (const [cc, l] of worst) {
+    console.log(`  ${cc}: ${l.length} missing / ${liveByCC[cc] || 0} live / ${xmlByCC[normCC(cc)] || 0} in XMLTV`);
+  }
 
   await mkdir(OUT_DIR, { recursive: true });
   // Time the SOURCE file was last updated (workflow passes its Last-Modified header);
